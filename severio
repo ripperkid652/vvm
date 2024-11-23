@@ -1,0 +1,177 @@
+# Import necessary libraries
+import numpy as np
+import pandas as pd 
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import GRU, Dense, Dropout, Bidirectional
+from scipy.stats import ttest_rel
+import matplotlib.pyplot as plt
+from sklearn.svm import SVR
+from PyEMD import CEEMDAN
+import warnings
+warnings.filterwarnings("ignore")
+
+# Load and preprocess the data
+file_path = '/content/updated_dataframe altimetry-5a7bdb.csv'  # Update with the correct file path if needed
+df = pd.read_csv(file_path)
+
+# Drop unnecessary columns and convert 'Date' column to datetime format
+df['Date'] = pd.to_datetime(df['Date'], format='%m/%d/%Y')
+df.set_index('Date', inplace=True)
+
+# Define lag intervals (time intervals in months)
+lag_intervals = [1, 2, 3, 9, 13]  # Lags in months
+
+# Initialize results dictionary to store metrics for each model at each time interval
+results = {model: {interval: {} for interval in lag_intervals} for model in ['GRU', 'BiGRU', 'MLP', 'SVR', 'Naive']}
+
+# Function to calculate performance metrics
+def calculate_metrics(y_true, y_pred):
+    mae = mean_absolute_error(y_true, y_pred)
+    rmse = np.sqrt(mean_squared_error(y_true, y_pred))
+    r2 = r2_score(y_true, y_pred)
+    mape = np.mean(np.abs((y_true - y_pred) / y_true)) * 100  # Calculate MAPE
+    return {
+        'MAE': mae,
+        'RMSE': rmse,
+        'R2': r2,
+        'MAPE': mape  # Add MAPE to the dictionary
+    }
+
+# Function to perform the Diebold-Mariano test
+def diebold_mariano_test(true, pred1, pred2):
+    error1 = true - pred1
+    error2 = true - pred2
+    dm_stat, p_value = ttest_rel(error1, error2)
+    return dm_stat, p_value
+
+# Apply CEEMDAN decomposition to the water level data
+ceemdan = CEEMDAN()
+imfs = ceemdan(df['altimetry'].values)  # Decompose the water level data into IMFs
+
+# Loop over each time interval to create lagged features, train, and evaluate each model
+for interval in lag_intervals:
+    # Create lagged feature for water level using the sum of all IMFs
+    lagged_df = pd.DataFrame({'altimetry': np.sum(imfs, axis=0)})
+    lagged_df[f'waterlevel_lag{interval}'] = lagged_df['altimetry'].shift(interval)
+    data = lagged_df.dropna()  # Drop rows with NaN values due to lagging
+
+    # Define features and target
+    X = data[['altimetry', f'waterlevel_lag{interval}']].values
+    y = data['altimetry'].values
+
+    # Normalize data
+    scaler_X, scaler_y = MinMaxScaler(), MinMaxScaler()
+    X_scaled = scaler_X.fit_transform(X)
+    y_scaled = scaler_y.fit_transform(y.reshape(-1, 1))
+
+    # Split data (80% train, 20% test)
+    train_size = int(len(X_scaled) * 0.8)
+    X_train, X_test = X_scaled[:train_size], X_scaled[train_size:]
+    y_train, y_test = y_scaled[:train_size], y_scaled[train_size:]
+
+    # Reshape for GRU and BiGRU models
+    X_train_gru = X_train.reshape((X_train.shape[0], 1, X_train.shape[1]))
+    X_test_gru = X_test.reshape((X_test.shape[0], 1, X_test.shape[1]))
+
+    # Naive Prediction
+    naive_pred = np.roll(y_test, shift=interval)
+    naive_pred[:interval] = y_test[:interval]  # Handle initial values
+    results['Naive'][interval] = calculate_metrics(scaler_y.inverse_transform(y_test), scaler_y.inverse_transform(naive_pred))
+
+    # Train and evaluate GRU model
+    gru_model = Sequential([
+        GRU(100, return_sequences=True, input_shape=(X_train_gru.shape[1], X_train_gru.shape[2])),
+        Dropout(0.3),
+        GRU(100),
+        Dropout(0.3),
+        Dense(1)
+    ])
+    gru_model.compile(optimizer='adam', loss='mean_squared_error')
+    gru_history = gru_model.fit(X_train_gru, y_train, epochs=50, batch_size=16, validation_data=(X_test_gru, y_test), verbose=1)
+    gru_pred = scaler_y.inverse_transform(gru_model.predict(X_test_gru))
+    results['GRU'][interval] = calculate_metrics(scaler_y.inverse_transform(y_test), gru_pred)
+
+    # Train and evaluate BiGRU model
+    bigru_model = Sequential([
+        Bidirectional(GRU(100, return_sequences=True), input_shape=(X_train_gru.shape[1], X_train_gru.shape[2])),
+        Dropout(0.3),
+        Bidirectional(GRU(100)),
+        Dropout(0.3),
+        Dense(1)
+    ])
+    bigru_model.compile(optimizer='adam', loss='mean_squared_error')
+    bigru_history = bigru_model.fit(X_train_gru, y_train, epochs=50, batch_size=16, validation_data=(X_test_gru, y_test), verbose=1)
+    bigru_pred = scaler_y.inverse_transform(bigru_model.predict(X_test_gru))
+    results['BiGRU'][interval] = calculate_metrics(scaler_y.inverse_transform(y_test), bigru_pred)
+
+    # Train and evaluate MLP model
+    mlp_model = Sequential([
+        Dense(128, activation='relu', input_shape=(X_train.shape[1],)),
+        Dropout(0.3),
+        Dense(64, activation='relu'),
+        Dropout(0.3),
+        Dense(1)
+    ])
+    mlp_model.compile(optimizer='adam', loss='mean_squared_error')
+    mlp_history = mlp_model.fit(X_train, y_train, epochs=50, batch_size=16, validation_data=(X_test, y_test), verbose=1)
+    mlp_pred = scaler_y.inverse_transform(mlp_model.predict(X_test))
+    results['MLP'][interval] = calculate_metrics(scaler_y.inverse_transform(y_test), mlp_pred)
+
+    # Train and evaluate SVR model
+    svr_model = SVR(kernel='rbf')
+    svr_model.fit(X_train, y_train.ravel())
+    svr_pred = scaler_y.inverse_transform(svr_model.predict(X_test).reshape(-1, 1))
+    results['SVR'][interval] = calculate_metrics(scaler_y.inverse_transform(y_test), svr_pred)
+
+    # Diebold-Mariano Test between each model pair
+    true_values = scaler_y.inverse_transform(y_test).ravel()
+    
+    # Compare all pairs of models (excluding Naive for this case)
+    models = ['GRU', 'BiGRU', 'MLP', 'SVR', 'Naive']
+    for model1 in models:
+        for model2 in models:
+            if model1 != model2:
+                pred1 = globals()[f"{model1.lower()}_pred"]
+                pred2 = globals()[f"{model2.lower()}_pred"]
+                dm_stat, p_value = diebold_mariano_test(true_values, pred1.ravel(), pred2.ravel())
+                print(f"\nDiebold-Mariano Test Results at Interval {interval} months:")
+                print(f"{model1} vs {model2}: DM Stat = {dm_stat:.4f}, p-value = {p_value:.4f}")
+
+    # Plot training vs validation loss for GRU, BiGRU, and MLP
+    plt.figure(figsize=(10, 5))
+    plt.plot(gru_history.history['loss'], label='GRU Training Loss')
+    plt.plot(gru_history.history['val_loss'], label='GRU Validation Loss')
+    plt.plot(bigru_history.history['loss'], label='BiGRU Training Loss')
+    plt.plot(bigru_history.history['val_loss'], label='BiGRU Validation Loss')
+    plt.plot(mlp_history.history['loss'], label='MLP Training Loss')
+    plt.plot(mlp_history.history['val_loss'], label='MLP Validation Loss')
+    plt.title(f'Training vs Validation Loss at Interval {interval} months')
+    plt.xlabel('Epochs')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.show()
+
+    # Plot original vs predicted values for each model at the interval
+    def plot_predictions(y_true, y_pred, title):
+        plt.figure(figsize=(10, 5))
+        plt.plot(y_true, label='True Values')
+        plt.plot(y_pred, label='Predicted Values')
+        plt.title(title)
+        plt.xlabel('Time')
+        plt.ylabel('Water Level')
+        plt.legend()
+        plt.show()
+
+    plot_predictions(true_values, gru_pred, f'GRU Predictions vs True Values at Interval {interval} months')
+    plot_predictions(true_values, bigru_pred, f'BiGRU Predictions vs True Values at Interval {interval} months')
+    plot_predictions(true_values, mlp_pred, f'MLP Predictions vs True Values at Interval {interval} months')
+    plot_predictions(true_values, svr_pred, f'SVR Predictions vs True Values at Interval {interval} months')
+    plot_predictions(true_values, naive_pred, f'Naive Predictions vs True Values at Interval {interval} months')
+
+# Print all results for each model and interval
+for model_name, intervals in results.items():
+    print(f"\nModel: {model_name}")
+    for interval, metrics in intervals.items():
+        print(f"Interval {interval} months - MAE: {metrics['MAE']:.4f}, RMSE: {metrics['RMSE']:.4f}, R2: {metrics['R2']:.4f}, MAPE: {metrics['MAPE']:.4f}")
