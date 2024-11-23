@@ -1,0 +1,59 @@
+import numpy as np
+import pandas as pd
+from sklearn.preprocessing import MinMaxScaler
+from tensorflow.keras.models import load_model
+import matplotlib.pyplot as plt
+
+# Load the dataset
+file_path = '/content/cleaned-data-51f54b.csv'  # Update with the correct file path if needed
+df = pd.read_csv(file_path)
+
+# Convert 'Date' column to datetime format and set as index
+df['Date'] = pd.to_datetime(df['Date'], format='%m/%d/%Y')
+df.set_index('Date', inplace=True)
+
+# Create lagged features (e.g., for 1 month lag - adjust if your model used a different lag)
+lag_interval = 30  # Or adjust to match your model's training data
+df[f'altimetry_lag{lag_interval}'] = df['altimetry'].shift(lag_interval)
+
+# Drop rows with NaN values due to lagging
+data = df.dropna()
+
+# Define features and target (matching the features used during training)
+X = data[['altimetry', f'altimetry_lag{lag_interval}']].values  # Use the same features as the model's input
+y = data['altimetry'].values
+
+# Normalize the data
+scaler_X, scaler_y = MinMaxScaler(), MinMaxScaler()
+X_scaled = scaler_X.fit_transform(X)
+y_scaled = scaler_y.fit_transform(y.reshape(-1, 1))
+
+# Reshape for the BiGRU model (samples, time steps, features)
+X_scaled = X_scaled.reshape((X_scaled.shape[0], 1, X_scaled.shape[1]))
+
+# Load the trained BiGRU model
+bigru_model_path = '/content/bivariate_gru_model.h5'  # Update with the correct model path
+bigru_model = load_model(bigru_model_path)
+
+# Predict water levels for the last entry in the dataset (1 month ahead)
+latest_data = X_scaled[-1].reshape(1, 1, X_scaled.shape[2])  # Use the most recent data point
+
+# Predict the next month's water level
+predicted_scaled = bigru_model.predict(latest_data)
+predicted = scaler_y.inverse_transform(predicted_scaled)
+
+# Output the predicted water level for the next month
+print(f'Predicted Water Level for the next month: {predicted[0][0]:.4f}')
+
+# ... (rest of the plotting and evaluation code) ...
+
+# Optionally, plot the actual vs predicted water levels (up to the current month)
+plt.figure(figsize=(12, 6))
+plt.plot(data.index, scaler_y.inverse_transform(y_scaled), label='Actual Water Levels', color='blue')
+plt.axvline(x=data.index[-1], color='gray', linestyle='--')  # Vertical line indicating the last data point
+plt.plot(data.index[-1] + pd.Timedelta(days=30), predicted, 'ro', label='Predicted Water Level for Next Month')
+plt.title('Actual vs Predicted Water Levels')
+plt.xlabel('Date')
+plt.ylabel('Water Level')
+plt.legend()
+plt.show()
