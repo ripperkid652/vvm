@@ -1,0 +1,76 @@
+# Import necessary libraries
+import numpy as np
+import pandas as pd
+from tensorflow.keras.models import load_model
+from sklearn.preprocessing import MinMaxScaler
+import matplotlib.pyplot as plt
+import warnings
+
+warnings.filterwarnings("ignore")
+
+# Correct paths for data file and model
+data_file_path = 'portal/cleaned-data-51f54b.csv'  # Path to your CSV file
+model_file_path = 'gru_model_interval_13.h5'  # Path to your saved model
+
+# Load the cleaned data
+df = pd.read_csv(data_file_path)
+
+# Convert 'Date' column to datetime format if present and set as index
+if 'Date' in df.columns:
+    df['Date'] = pd.to_datetime(df['Date'])
+    df.set_index('Date', inplace=True)
+
+# Add a lagged feature for altimetry
+lag_interval = 1  # Update this to the interval used during training
+df['waterlevel_lag'] = df['altimetry'].shift(lag_interval)
+
+# Drop rows with NaN values due to lagging
+data = df.dropna()
+
+# Use the same features as during training (adjust if needed)
+features = ['altimetry', 'waterlevel_lag']  # Ensure these match the training setup
+X = data[features].values
+
+# Normalize the input features
+scaler_X = MinMaxScaler()
+X_scaled = scaler_X.fit_transform(X)
+
+# Reshape input to match the BiGRU model's expected input format
+X_biGRU = X_scaled.reshape((X_scaled.shape[0], 1, X_scaled.shape[1]))
+
+# Load the pre-trained BiGRU model
+bigru_model = load_model(model_file_path)
+
+# Predict using the loaded model
+y_pred_scaled = bigru_model.predict(X_biGRU)
+
+# Inverse transform predictions to original scale
+scaler_y = MinMaxScaler()
+scaler_y.fit(data[['altimetry']].values)  # Fit scaler to the target column
+y_pred = scaler_y.inverse_transform(y_pred_scaled)
+
+# Extract the true values for comparison
+y_true = data['altimetry'].values
+
+# Plot the predictions vs true values
+plt.figure(figsize=(12, 6))
+plt.plot(data.index, y_true, label='True Altimetry', color='blue')
+plt.plot(data.index, y_pred, label='Predicted Altimetry', linestyle='--', color='orange')
+plt.title('BiGRU Model Prediction vs True Altimetry')
+plt.xlabel('Date')
+plt.ylabel('Water Levels')
+plt.legend()
+plt.grid()
+plt.show()
+
+# Evaluate the model's performance
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+
+mae = mean_absolute_error(y_true, y_pred)
+rmse = np.sqrt(mean_squared_error(y_true, y_pred))
+r2 = r2_score(y_true, y_pred)
+
+print(f"Model Performance:")
+print(f"Mean Absolute Error (MAE): {mae:.4f}")
+print(f"Root Mean Squared Error (RMSE): {rmse:.4f}")
+print(f"R² Score: {r2:.4f}")
