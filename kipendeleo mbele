@@ -1,0 +1,38 @@
+# Forecast water levels for the next 3 months
+forecast_steps = 3
+predicted_values = []
+
+# Start with the last row of the normalized input data
+current_input = X_scaled[-1].reshape((1, 1, X_scaled.shape[1]))
+
+for _ in range(forecast_steps):
+    # Predict the next water level
+    next_pred_scaled = bigru_model.predict(current_input)
+    # Inverse transform to get the original scale value
+    next_pred = scaler_y.inverse_transform(next_pred_scaled)[0, 0]
+    predicted_values.append(next_pred)
+
+    # Update the input with the predicted value for the next iteration
+    next_input = np.append(current_input[0, 0, 1:], next_pred_scaled).reshape((1, 1, X_scaled.shape[1]))
+    current_input = next_input
+
+# Create a DataFrame for the predictions
+forecast_dates = pd.date_range(start=data.index[-1], periods=forecast_steps + 1, freq='M')[1:]
+forecast_df = pd.DataFrame({
+    'Date': forecast_dates,
+    'Predicted Altimetry': predicted_values
+})
+
+print("\nPredicted Water Levels for the Next 3 Months:")
+print(forecast_df)
+
+# Plot true values along with the forecast
+plt.figure(figsize=(12, 6))
+plt.plot(data.index, y_true, label='True Altimetry', color='blue')
+plt.plot(forecast_df['Date'], forecast_df['Predicted Altimetry'], label='Forecast', linestyle='--', color='green', marker='o')
+plt.title('BiGRU Model Forecast for Next 3 Months')
+plt.xlabel('Date')
+plt.ylabel('Water Levels')
+plt.legend()
+plt.grid()
+plt.show()
