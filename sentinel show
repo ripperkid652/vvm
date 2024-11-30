@@ -1,0 +1,102 @@
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import netCDF4 as nc
+import numpy as np
+import rasterio
+
+# Function to convert seconds to decimal years
+def second_to_dyr(seconds):
+    return seconds / (365.25 * 24 * 3600)
+
+# File paths
+path_s3l2 = 'portal/copy/enhanced_measurement.20160425nc'
+path_rsimg = 'portal/Sentinel2_RGB.tif'
+
+# Read Sentinel-3 data
+s3_l2 = nc.Dataset(path_s3l2)
+
+# Explore variables
+for i, key in enumerate(s3_l2.variables.keys()):
+    print(f"{i + 1}: {key}")
+
+# Extract variables from the Sentinel-3 file
+lat_20_ku = s3_l2['lat_cor_20_ku'][:]
+lon_20_ku = s3_l2['lon_cor_20_ku'][:]
+time_20_ku = s3_l2['time_20_ku'][:]
+waveform_20_ku = s3_l2['waveform_20_ku'][:]
+time_20_ku_dyr = second_to_dyr(time_20_ku)
+print('Waveform data shape:', waveform_20_ku.shape)
+
+# Load raster data with rasterio
+with rasterio.open(path_rsimg) as rsimg:
+    raster_array = rsimg.read(1)  # Read the first band
+    raster_extent = [
+        rsimg.bounds.left, rsimg.bounds.right,
+        rsimg.bounds.bottom, rsimg.bounds.top
+    ]
+    raster_crs = rsimg.crs  # Coordinate Reference System
+    print(f"Raster CRS: {raster_crs}")
+    print(f"Raster Extent: {raster_extent}")
+
+# Filter data to a specific region (Lake Naivasha)
+ids = np.where((lat_20_ku > -0.95) & (lat_20_ku < -0.7))  # Adjust region for Lake Naivasha
+
+# Plot raster image and overlay altimetry track
+fig, ax = plt.subplots(1, 1, figsize=(8, 8))
+im = ax.imshow(
+    raster_array,
+    extent=raster_extent,
+    cmap='gray',
+    origin='upper'
+)
+plt.colorbar(im, ax=ax, orientation='vertical', label='Pixel Intensity')
+ax.scatter(
+    x=lon_20_ku[ids],
+    y=lat_20_ku[ids],
+    s=0.5,
+    color='red',
+    label='Altimetry Data'
+)
+plt.title("Lake Naivasha Region: Sentinel-3 Data on Raster Image")
+plt.legend()
+plt.show()
+
+# Debugging raster alignment
+print("Raster Array Shape:", raster_array.shape)
+print("Lon/Lat Ranges for Altimetry Data:")
+print(f"Longitude: {lon_20_ku[ids].min()} to {lon_20_ku[ids].max()}")
+print(f"Latitude: {lat_20_ku[ids].min()} to {lat_20_ku[ids].max()}")
+
+# If still not displaying correctly, check and reproject altimetry data
+# This section verifies alignment of altimetry points with the raster CRS.
+if raster_crs != "EPSG:4326":  # Check if CRS is not in WGS84
+    print("Raster CRS is not WGS84. Reprojecting may be required.")
+    # Reprojection steps could be added if necessary.
+
+# Add waveform analysis
+ids = np.argmin(abs((lat_20_ku[:] - -0.8)))  # Adjust latitude for waveform analysis
+wf_sar = s3_l2['waveform_20_ku'][:][ids]
+wf_lrm = s3_l2['waveform_20_plrm_ku'][:][ids]
+
+# Plot the SAR and LRM waveforms
+fig, ax = plt.subplots(1, 3, figsize=(12, 3))
+
+# Display raster image and overlay selected location
+ax[0].imshow(raster_array, extent=raster_extent, cmap='gray', origin='upper')
+ax[0].scatter(x=lon_20_ku[ids], y=lat_20_ku[ids], s=2.5, color='red')  # Altimetry data
+ax[0].set_title("Location on Raster")
+
+# Plot SAR waveform
+ax[1].plot(wf_sar, color='blue')
+ax[1].set_title('SAR Waveform')
+ax[1].set_xlabel('Gate Number')
+ax[1].set_ylabel('Amplitude')
+
+# Plot LRM waveform
+ax[2].plot(wf_lrm, color='green')
+ax[2].set_title('LRM Waveform')
+ax[2].set_xlabel('Gate Number')
+ax[2].set_ylabel('Amplitude')
+
+plt.tight_layout()
+plt.show()
