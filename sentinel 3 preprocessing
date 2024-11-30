@@ -1,0 +1,116 @@
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import netCDF4 as nc
+import numpy as np
+import rasterio
+
+# Helper function to convert seconds to decimal years
+def second_to_dyr(seconds):
+    return seconds / (365.25 * 24 * 3600)
+
+# Helper function to resample 1Hz data to 20Hz data using nearest time interpolation
+def hz01_hz20(data_01hz, time_01hz, time_20hz):
+    time_20hz_ = np.expand_dims(time_20hz, axis=1)
+    dif_time = abs(time_20hz_ - time_01hz)
+    ind_min = dif_time.argmin(axis=1)
+    data_20hz = data_01hz[ind_min]
+    return data_20hz
+
+# File paths
+path_s3l2 = 'portal/copy/enhanced_measurement20190119.nc'
+path_rsimg = 'portal/Sentinel2_RGB.tif'
+path_rsimg_mask = 'portal/water_mask_2020_06.tif'
+
+# Load Sentinel-3 data
+s3_l2 = nc.Dataset(path_s3l2)
+
+# Explore variables
+for i, key in enumerate(s3_l2.variables.keys()):
+    print(f"{i + 1}: {key}")
+
+# Extract Sentinel-3 variables
+lat_20_ku = s3_l2['lat_cor_20_ku'][:]
+lon_20_ku = s3_l2['lon_cor_20_ku'][:]
+time_20_ku = s3_l2['time_20_ku'][:]
+time_20_ku_dyr = second_to_dyr(time_20_ku)
+
+# Load raster image and water mask
+with rasterio.open(path_rsimg) as rsimg:
+    raster_array = rsimg.read(1)
+    raster_extent = [rsimg.bounds.left, rsimg.bounds.right, rsimg.bounds.bottom, rsimg.bounds.top]
+
+with rasterio.open(path_rsimg_mask) as rsimg_mask:
+    mask_array = rsimg_mask.read(1)
+
+# Filter data to a specific region for Lake Naivasha
+ids = np.where((lat_20_ku > -0.95) & (lat_20_ku < -0.7))
+
+# Plot Sentinel-3 tracks on the water mask
+fig, ax = plt.subplots(figsize=(8, 8))
+ax.imshow(mask_array, extent=raster_extent, cmap='Blues', origin='upper')
+ax.scatter(lon_20_ku[ids], lat_20_ku[ids], s=0.5, color='red')
+plt.title("Sentinel-3 Tracks on Lake Naivasha Water Mask")
+plt.xlabel("Longitude")
+plt.ylabel("Latitude")
+plt.show()
+
+# Geophysical corrections (based on official documentation)
+geo_corr_01hz = [
+    'mod_dry_tropo_cor_meas_altitude_01', 'mod_wet_tropo_cor_meas_altitude_01',
+    'iono_cor_gim_01_ku', 'load_tide_sol1_01', 'solid_earth_tide_01', 'pole_tide_01'
+]
+corr_01hz = np.sum([s3_l2[var][:] for var in geo_corr_01hz], axis=0)
+
+# Resample corrections to 20Hz
+times_20 = s3_l2['time_20_ku'][:]
+times_01 = s3_l2['time_01'][:]
+corr_20hz = hz01_hz20(corr_01hz, times_01, times_20)
+
+# Compute corrected surface water heights
+h_cor_ocean = s3_l2['alt_20_ku'][:] - s3_l2['range_ocean_20_ku'][:] - corr_20hz
+h_cor_ocog = s3_l2['alt_20_ku'][:] - s3_l2['range_ocog_20_ku'][:] - corr_20hz
+
+# Plot corrected elevations
+plt.figure(figsize=(10, 5))
+plt.plot(lat_20_ku[ids], h_cor_ocog[ids], 'r.', label="OCOG")
+plt.plot(lat_20_ku[ids], h_cor_ocean[ids], 'b.', label="Ocean Retracker")
+plt.ylim(1884, 1890)  # Adjust based on Lake Naivasha's elevation range
+plt.xlabel("Latitude")
+plt.ylabel("Elevation (m)")
+plt.legend()
+plt.title("Elevation Profiles: Sentinel-3 Over Lake Naivasha")
+plt.show()
+
+# Waveform retracker implementation
+gate_retrack = 55.5
+ids_waveform = np.argmin(abs(lat_20_ku[:] - -0.8))  # Example point near Lake Naivasha
+wf_sar = s3_l2['waveform_20_ku'][:][ids_waveform]
+
+fig, ax = plt.subplots(1, 2, figsize=(10, 3))
+ax[0].imshow(mask_array, extent=raster_extent, cmap='Blues', origin='upper')
+ax[0].scatter(lon_20_ku[ids_waveform], lat_20_ku[ids_waveform], s=2.5, color='red')
+ax[0].set_title("SAR Location on Water Mask")
+ax[1].plot(wf_sar, color='blue')
+ax[1].set_title("SAR Waveform")
+ax[1].vlines(gate_retrack, ymin=-100, ymax=2000, color='red')
+ax[1].set_xlim(40, 90)
+plt.show()
+
+# Calculate elevation using the geophysical correction and retracker adjustments
+print("OCOG Elevation (Dataset):\n", s3_l2['elevation_ocog_20_ku'][ids_waveform])
+
+# Elevation with manual geophysical correction
+h_cor_ocog = s3_l2['alt_20_ku'][:] - s3_l2['range_ocog_20_ku'][:] - corr_20hz
+print("OCOG Elevation with Manual Correction:\n", h_cor_ocog[ids_waveform])
+
+# Calculate retracker correction
+cor_retrack = (gate_retrack - 43) * 3.125 * 0.3 / 2
+print("Range Correction by Manual Retracker:\n", cor_retrack)
+
+# Elevation with retracker correction
+h_cor_retracked = (
+    s3_l2['alt_20_ku'][ids_waveform]
+    - (s3_l2['tracker_range_20_ku'][ids_waveform] + cor_retrack)
+    - corr_20hz[ids_waveform]
+)
+print("Elevation with Manual Correction and Retracker:\n", h_cor_retracked)
