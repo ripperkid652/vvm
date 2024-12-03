@@ -1,0 +1,84 @@
+import os
+import matplotlib.pyplot as plt
+import netCDF4 as nc
+import numpy as np
+import rasterio
+from shapely.geometry import Point
+
+# Helper function to convert seconds to decimal years
+def second_to_dyr(seconds):
+    return seconds / (365.25 * 24 * 3600)
+
+# Helper function to resample 1Hz data to 20Hz data using nearest time interpolation
+def hz01_hz20(data_01hz, time_01hz, time_20hz):
+    time_20hz_ = np.expand_dims(time_20hz, axis=1)
+    dif_time = abs(time_20hz_ - time_01hz)
+    ind_min = dif_time.argmin(axis=1)
+    data_20hz = data_01hz[ind_min]
+    return data_20hz
+
+# Define paths
+data_folder = 'portal/copy2017'
+path_rsimg_mask = 'portal/water_mask_2020_06.tif'
+
+# Load raster mask
+with rasterio.open(path_rsimg_mask) as rsimg_mask:
+    mask_array = rsimg_mask.read(1)  # Load water mask
+    mask_extent = [rsimg_mask.bounds.left, rsimg_mask.bounds.right, rsimg_mask.bounds.bottom, rsimg_mask.bounds.top]
+    transform = rsimg_mask.transform
+
+# Convert mask to binary (1 = water, 0 = no water)
+binary_mask = mask_array > 0
+
+# Iterate through all NetCDF files in the folder
+all_tracks = []
+for file in os.listdir(data_folder):
+    if file.endswith(".nc"):
+        file_path = os.path.join(data_folder, file)
+        print(f"Processing file: {file_path}")
+        
+        # Load NetCDF file
+        s3_l2 = nc.Dataset(file_path)
+        
+        # Extract variables
+        lat_20_ku = s3_l2['lat_cor_20_ku'][:]
+        lon_20_ku = s3_l2['lon_cor_20_ku'][:]
+        
+        # Filter points using the water mask
+        points_in_mask = []
+        for lat, lon in zip(lat_20_ku, lon_20_ku):
+            row, col = rasterio.transform.rowcol(transform, lon, lat)
+            if 0 <= row < binary_mask.shape[0] and 0 <= col < binary_mask.shape[1]:
+                if binary_mask[row, col]:  # Check if the point is in the water mask
+                    points_in_mask.append((lat, lon))
+        
+        # Collect data for the track
+        if points_in_mask:
+            points_in_mask = np.array(points_in_mask)
+            track_data = {
+                'lat': points_in_mask[:, 0],
+                'lon': points_in_mask[:, 1]
+            }
+            all_tracks.append(track_data)
+
+# Plot all tracks on the water mask
+fig, ax = plt.subplots(figsize=(10, 10))
+ax.imshow(mask_array, extent=mask_extent, cmap='Blues', origin='upper')
+
+# Overlay tracks with larger, more distinguishable dots
+for track in all_tracks:
+    ax.scatter(
+        track['lon'], 
+        track['lat'], 
+        s=10,               # Increased size of the dots
+        label="Sentinel-3 Tracks", 
+        color='red', 
+        alpha=0.8,          # Added transparency for better visibility
+        edgecolor='black',  # Optional: adds a border to make dots clearer
+        marker='o'          # Circular marker for clarity
+    )
+
+plt.title("Sentinel-3 Tracks on Lake Naivasha Water Mask")
+plt.xlabel("Longitude")
+plt.ylabel("Latitude")
+plt.show()
