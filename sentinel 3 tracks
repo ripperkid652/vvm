@@ -1,0 +1,85 @@
+import os
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import netCDF4 as nc
+import numpy as np
+import rasterio
+from rasterio.features import geometry_mask
+from shapely.geometry import Point
+from shapely.geometry.polygon import Polygon
+
+# Helper function to convert seconds to decimal years
+def second_to_dyr(seconds):
+    return seconds / (365.25 * 24 * 3600)
+
+# Helper function to resample 1Hz data to 20Hz data using nearest time interpolation
+def hz01_hz20(data_01hz, time_01hz, time_20hz):
+    time_20hz_ = np.expand_dims(time_20hz, axis=1)
+    dif_time = abs(time_20hz_ - time_01hz)
+    ind_min = dif_time.argmin(axis=1)
+    data_20hz = data_01hz[ind_min]
+    return data_20hz
+
+# Define paths
+data_folder = 'portal/copy2017'
+path_rsimg = 'portal/Sentinel2_RGB.tif'
+path_rsimg_mask = 'portal/water_mask_2020_06.tif'
+
+# Load raster mask
+with rasterio.open(path_rsimg_mask) as rsimg_mask:
+    mask_array = rsimg_mask.read(1)
+    mask_extent = [rsimg_mask.bounds.left, rsimg_mask.bounds.right, rsimg_mask.bounds.bottom, rsimg_mask.bounds.top]
+    transform = rsimg_mask.transform
+
+# Define a polygon for the water mask
+water_mask_polygon = Polygon([
+    (mask_extent[0], mask_extent[2]),  # Bottom-left
+    (mask_extent[1], mask_extent[2]),  # Bottom-right
+    (mask_extent[1], mask_extent[3]),  # Top-right
+    (mask_extent[0], mask_extent[3])   # Top-left
+])
+
+# Iterate through all NetCDF files in the folder
+all_tracks = []
+for file in os.listdir(data_folder):
+    if file.endswith(".nc"):
+        file_path = os.path.join(data_folder, file)
+        print(f"Processing file: {file_path}")
+        
+        # Load NetCDF file
+        s3_l2 = nc.Dataset(file_path)
+        
+        # Extract variables
+        lat_20_ku = s3_l2['lat_cor_20_ku'][:]
+        lon_20_ku = s3_l2['lon_cor_20_ku'][:]
+        
+        # Filter points inside the water mask
+        points = np.array([Point(lon, lat) for lon, lat in zip(lon_20_ku, lat_20_ku)])
+        points_inside = [i for i, point in enumerate(points) if point.within(water_mask_polygon)]
+        
+        # Collect data for the track
+        track_data = {
+            'lat': lat_20_ku[points_inside],
+            'lon': lon_20_ku[points_inside]
+        }
+        all_tracks.append(track_data)
+
+# Plot all tracks on the water mask
+fig, ax = plt.subplots(figsize=(10, 10))
+ax.imshow(mask_array, extent=mask_extent, cmap='Blues', origin='upper')
+
+# Overlay tracks
+for track in all_tracks:
+    ax.scatter(track['lon'], track['lat'], s=0.5, label="Sentinel-3 Tracks", color='red')
+
+plt.title("Sentinel-3 Tracks on Lake Naivasha Water Mask")
+plt.xlabel("Longitude")
+plt.ylabel("Latitude")
+plt.show()
+
+# Continue processing (e.g., elevation correction) for tracks within the lake
+# Assuming you want to handle elevation for each track after filtering
+for track in all_tracks:
+    lat_filtered = track['lat']
+    lon_filtered = track['lon']
+    # Perform elevation corrections and further analysis here
