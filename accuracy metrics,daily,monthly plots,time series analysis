@@ -1,0 +1,119 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.metrics import mean_squared_error, r2_score
+
+# Load the data
+file_path = 'portal/arranged-data-water levels   bila dah.csv'
+data = pd.read_csv(file_path, parse_dates=['category'], dayfirst=True)  # Adjust if the column name differs
+
+# Define retrackers and columns
+retrackers = {
+    'OCOG': 'OCOG_Water_Levels',
+    'Ocean': 'Ocean_Water_Levels',
+    'Sea Ice': 'Sea_Ice_Water_Levels'
+}
+
+# Initialize plot
+plt.figure(figsize=(12, 8))
+
+# Loop through each retracker, calculate accuracy metrics, and plot
+for i, (name, column) in enumerate(retrackers.items(), 1):
+    insitu = data['insitu']
+    retracker = data[column]
+    
+    # Calculate RMSE and R²
+    rmse = np.sqrt(mean_squared_error(insitu, retracker))
+    r2 = r2_score(insitu, retracker)
+    
+    # Plot In-Situ vs Retracker Water Levels
+    plt.subplot(3, 1, i)  # Create a subplot for each retracker
+    plt.plot(data['category'], insitu, label='In-Situ', color='black', linestyle='-', linewidth=1.5)
+    plt.plot(data['category'], retracker, label=name, color='black', linestyle='--', linewidth=1.5)
+    
+    # Add accuracy metrics as text
+    plt.text(0.02, 0.85, f'RMSE = {rmse:.2f} m\nR² = {r2:.3f}', 
+             transform=plt.gca().transAxes, fontsize=10, 
+             bbox=dict(facecolor='white', edgecolor='grey', alpha=0.7))
+    
+    # Labels and title
+    plt.title(f'In-Situ vs {name} Water Levels')
+    plt.ylabel('Water Level (m)')
+    plt.legend()
+    plt.grid(True)
+
+# Adjust layout and show plot
+plt.tight_layout()
+plt.show()
+
+
+
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.metrics import mean_squared_error, r2_score
+
+# Load the data
+file_path = 'portal/arranged-data-water levels   bila dah.csv'
+data = pd.read_csv(file_path, dayfirst=True)  # Load CSV file
+
+# Explicitly convert 'category' column to datetime
+data['category'] = pd.to_datetime(data['category'], dayfirst=True, errors='coerce')
+
+# Check if there are any invalid dates
+print(data['category'].isna().sum())  # Check for invalid dates
+
+# Drop rows where 'category' is invalid
+data = data.dropna(subset=['category'])
+
+# Convert to monthly data by averaging
+data['month'] = data['category'].dt.to_period('M')  # Add a new column for 'Month-Year'
+monthly_data = data.groupby('month').mean().reset_index()
+
+# Convert the 'month' column back to datetime for plotting
+monthly_data['month'] = monthly_data['month'].dt.to_timestamp()
+
+# Define retrackers and columns
+retrackers = {
+    'OCOG': 'OCOG_Water_Levels',
+    'Ocean': 'Ocean_Water_Levels',
+    'Sea Ice': 'Sea_Ice_Water_Levels'
+}
+
+# Initialize plot
+plt.figure(figsize=(12, 8))
+
+# Loop through each retracker, calculate accuracy metrics, and plot
+for i, (name, column) in enumerate(retrackers.items(), 1):
+    insitu = monthly_data['insitu']
+    retracker = monthly_data[column]
+    
+    # Calculate RMSE and R²
+    rmse = np.sqrt(mean_squared_error(insitu, retracker))
+    r2 = r2_score(insitu, retracker)
+    
+    # Plot In-Situ vs Retracker Water Levels (Monthly)
+    plt.subplot(3, 1, i)
+    plt.plot(monthly_data['month'], insitu, label='In-Situ', color='black', linestyle='-', linewidth=1.5)
+    plt.plot(monthly_data['month'], retracker, label=name, color='black', linestyle='--', linewidth=1.5)
+    
+    # Add accuracy metrics as text
+    plt.text(0.02, 0.85, f'RMSE = {rmse:.2f} m\nR² = {r2:.3f}', 
+             transform=plt.gca().transAxes, fontsize=10, 
+             bbox=dict(facecolor='white', edgecolor='grey', alpha=0.7))
+    
+    # Labels and title
+    plt.title(f'Monthly Averages: In-Situ vs {name} Water Levels')
+    plt.ylabel('Water Level (m)')
+    plt.legend()
+    plt.grid(True)
+
+# Adjust layout and show plot
+plt.tight_layout()
+plt.show()
+
+
+
+
+
