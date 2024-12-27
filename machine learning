@@ -1,0 +1,106 @@
+# Import necessary libraries
+import numpy as np
+import pandas as pd
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.svm import SVR
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Dropout
+from sklearn.model_selection import train_test_split
+import matplotlib.pyplot as plt
+import warnings
+
+warnings.filterwarnings("ignore")
+!pip install EMD-signal #installing EMD-signal, this package contains the CEEMDAN class
+from PyEMD import CEEMDAN #importing PyEMD, this will work after installing EMD-signal
+
+# Load and preprocess the data
+file_path = '/content/OCOG FACTORS.csv'  # Update with the correct file path if needed
+df = pd.read_csv(file_path)
+
+# Convert 'Date' column to datetime format and set it as the index
+df['category'] = pd.to_datetime(df['category'], format='%m/%d/%Y')
+df.set_index('category', inplace=True)
+
+# Apply CEEMDAN decomposition to the water level data
+ceemdan = CEEMDAN()
+imfs = ceemdan(df['Water_Levels'].values)  # Decompose the water level data into IMFs
+
+# Combine all IMFs except the last (residual) to denoise the signal
+df['Water_Levels_Denoised'] = np.sum(imfs[:-1], axis=0)
+
+# Define features and target (without lagging)
+X = df[['Water_Levels_Denoised']].values  # Use only the denoised water levels
+y = df['Water_Levels_Denoised'].values    # Target is the same column
+
+# Normalize features and target
+scaler_X = MinMaxScaler()
+scaler_y = MinMaxScaler()
+X_scaled = scaler_X.fit_transform(X)
+y_scaled = scaler_y.fit_transform(y.reshape(-1, 1))
+
+# Split data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(X_scaled, y_scaled, test_size=0.2, random_state=42)
+
+# Define function to calculate performance metrics
+def calculate_metrics(y_true, y_pred):
+    mae = mean_absolute_error(y_true, y_pred)
+    rmse = np.sqrt(mean_squared_error(y_true, y_pred))
+    r2 = r2_score(y_true, y_pred)
+    mape = np.mean(np.abs((y_true - y_pred) / y_true)) * 100
+    return {'MAE': mae, 'RMSE': rmse, 'R2': r2, 'MAPE': mape}
+
+# Train and evaluate MLP model
+mlp_model = Sequential([
+    Dense(128, activation='relu', input_shape=(X_train.shape[1],)),
+    Dropout(0.3),
+    Dense(64, activation='relu'),
+    Dropout(0.3),
+    Dense(1)
+])
+mlp_model.compile(optimizer='adam', loss='mean_squared_error')
+mlp_history = mlp_model.fit(X_train, y_train, epochs=50, batch_size=16, validation_data=(X_test, y_test), verbose=1)
+mlp_pred = scaler_y.inverse_transform(mlp_model.predict(X_test))
+
+# Train and evaluate SVM model
+svm_model = SVR(kernel='rbf', C=10, epsilon=0.1)  # SVM model with RBF kernel
+svm_model.fit(X_train, y_train.ravel())  # Train SVM
+svm_pred_scaled = svm_model.predict(X_test)
+svm_pred = scaler_y.inverse_transform(svm_pred_scaled.reshape(-1, 1))  # Scale back to original range
+
+# Train and evaluate Random Forest model
+rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
+rf_model.fit(X_train, y_train.ravel())  # Train Random Forest
+rf_pred_scaled = rf_model.predict(X_test)
+rf_pred = scaler_y.inverse_transform(rf_pred_scaled.reshape(-1, 1))  # Scale back to original range
+
+# Evaluate all models
+y_test_original = scaler_y.inverse_transform(y_test)
+results = {
+    'MLP': calculate_metrics(y_test_original, mlp_pred),
+    'SVM': calculate_metrics(y_test_original, svm_pred),
+    'Random Forest': calculate_metrics(y_test_original, rf_pred),
+}
+
+# Display results
+for model_name, metrics in results.items():
+    print(f"{model_name} Performance:")
+    for metric, value in metrics.items():
+        print(f"{metric}: {value:.4f}")
+    print()
+
+# Plot original vs predicted values for each model
+def plot_predictions(y_true, y_pred, title):
+    plt.figure(figsize=(10, 5))
+    plt.plot(y_true, label='True Values')
+    plt.plot(y_pred, label='Predicted Values')
+    plt.title(title)
+    plt.xlabel('Samples')
+    plt.ylabel('Water Level')
+    plt.legend()
+    plt.show()
+
+plot_predictions(y_test_original, mlp_pred, 'MLP Predictions vs True Values')
+plot_predictions(y_test_original, svm_pred, 'SVM Predictions vs True Values')
+plot_predictions(y_test_original, rf_pred, 'Random Forest Predictions vs True Values')
