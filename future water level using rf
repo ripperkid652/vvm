@@ -1,0 +1,52 @@
+import pandas as pd
+import numpy as np
+from sklearn.linear_model import LinearRegression
+import matplotlib.pyplot as plt
+
+# Load the dataset
+new_data = pd.read_csv('/content/OCOG FACTORS.csv')
+
+# Convert 'category' column to datetime format and set it as the index
+new_data['category'] = pd.to_datetime(new_data['category'], format='%m/%d/%Y')
+new_data.set_index('category', inplace=True)
+
+# Extract water levels for trend analysis
+historical_data = new_data['Water_Levels']
+
+# Prepare data for regression model
+historical_data = historical_data.reset_index()
+historical_data['Year'] = historical_data['category'].dt.year + (historical_data['category'].dt.month - 1) / 12
+X = historical_data['Year'].values.reshape(-1, 1)
+y = historical_data['Water_Levels'].values
+
+# Fit a linear regression model
+reg_model = LinearRegression()
+reg_model.fit(X, y)
+
+# Generate future years up to 2028
+future_years = np.arange(historical_data['Year'].iloc[-1] + (1/12), 2028 + (12/12), 1/12)
+future_X = future_years.reshape(-1, 1)
+
+# Predict future water levels
+predicted_future_levels = reg_model.predict(future_X)
+
+# Create a DataFrame for future predictions
+future_dates = pd.date_range(historical_data['category'].iloc[-1] + pd.DateOffset(months=1), '2028-12-31', freq='M')
+future_df = pd.DataFrame({'Date': future_dates, 'Predicted_Water_Levels': predicted_future_levels})
+
+# Combine historical and future data for plotting
+combined_data = pd.concat([
+    pd.DataFrame({'Date': historical_data['category'], 'Water_Levels': historical_data['Water_Levels']}),
+    future_df.rename(columns={'Date': 'Date', 'Predicted_Water_Levels': 'Water_Levels'})
+])
+
+# Plot observed and predicted water levels in one plot
+plt.figure(figsize=(15, 7))
+plt.plot(combined_data['Date'], combined_data['Water_Levels'], label='Observed & Predicted Water Levels', color='orange')
+plt.axvline(x=historical_data['category'].iloc[-1], color='gray', linestyle='--', label='Start of Prediction')
+plt.title('Observed and Predicted Water Levels (Extrapolated to 2028)')
+plt.xlabel('Year')
+plt.ylabel('Water Levels (m)')
+plt.legend()
+plt.grid()
+plt.show()
